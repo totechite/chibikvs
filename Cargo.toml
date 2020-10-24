@@ -1,0 +1,18 @@
+[package]
+name = "chibikvs"
+version = "0.0.1"
+authors = ["totechite <yusuke.kataoka09@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+regex = "1.3.1"
+protobuf = "2.10.2"
+serde = {version = "1.0", features = ["derive"]}
+serde_json = "1.0"
+rand = "0.7.3"
+uuid = { version = "0.8", features = [ "v4"] }
+
+[build-dependencies]
+protoc-rust = "2.0"
