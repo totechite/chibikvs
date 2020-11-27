@@ -43,13 +43,20 @@ fn main() {
 
     let mut rng = rand::thread_rng();
     let mut insert_dataset = vec![];
-    for _ in 0..18 {
+    for _ in 0..100 {
         let key = rng.gen::<u8>();
         insert_dataset.push(key as usize);
     }
     println!("{:?}", insert_dataset);
-    for key in insert_dataset {
+    for key in insert_dataset.clone() {
+        println!("{:?}", key);
         btree.insert(key, "data");
     }
     println!("{:?}", btree);
+    btree.keys();
+    // println!("{:?}", btree.keys());
+    insert_dataset.sort();
+    println!("{:?}", insert_dataset);
+    println!("{:?}", btree.values());
+
 }

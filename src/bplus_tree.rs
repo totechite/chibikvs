@@ -30,6 +30,9 @@ pub struct BPlusTree<K: Debug, V: Debug> {
     root: Root<K, V>,
 }
 
+unsafe impl<K: Ord + Debug, V: Debug> Sync for BPlusTree<K, V> {}
+unsafe impl<K: Ord + Debug, V: Debug> Send for BPlusTree<K, V> {}
+
 impl<K: Ord + Debug, V: Debug> BPlusTree<K, V> {
     pub fn new() -> Self {
         BPlusTree { root: Root::new() }
@@ -41,9 +44,14 @@ struct Root<K: Debug, V: Debug> {
     pub root: NodeRef<K, V, marker::LeafOrInternal>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BoxedNode<K: Debug, V: Debug> {
     ptr: NonNull<LeafNode<K, V>>,
+}
+
+#[derive(Debug)]
+struct BoxedKey<'a, K: Debug> {
+    content: &'a K,
 }
 
 #[derive(Debug)]
@@ -66,8 +74,10 @@ unsafe impl<K: Ord + Debug, V: Debug, Type> Send for NodeRef<K, V, Type> {}
 //     }
 // }
 
-impl<K: Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
-    fn force(&self) -> ForceResult<NodeRef<K, V, marker::Leaf>, NodeRef<K, V, marker::Internal>> {
+impl<'a, K: Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
+    fn force(
+        &'a self,
+    ) -> ForceResult<NodeRef<K, V, marker::Leaf>, NodeRef<K, V, marker::Internal>> {
         let boxed_node = BoxedNode::<K, V> {
             ptr: self.node.as_ptr(),
         };
@@ -88,16 +98,23 @@ impl<K: Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
 }
 
 impl<'a, K: Debug, V: Debug> NodeRef<K, V, marker::Internal> {
-    fn as_internal(&self) -> &InternalNode<'a, K, V> {
+    fn as_internal(&self) -> &'a InternalNode<K, V> {
         unsafe {
             &std::mem::transmute::<&LeafNode<K, V>, &InternalNode<K, V>>(&self.node.ptr.as_ref())
         }
     }
-    fn as_internal_mut(&mut self) -> &mut InternalNode<'a, K, V> {
+    fn as_internal_mut(&mut self) -> &'a mut InternalNode<K, V> {
         unsafe {
             std::mem::transmute::<&mut LeafNode<K, V>, &mut InternalNode<K, V>>(
                 &mut self.node.ptr.as_mut(),
             )
+        }
+    }
+    fn up_cast(self) -> NodeRef<K, V, marker::LeafOrInternal> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _metatype: PhantomData,
         }
     }
 }
@@ -121,16 +138,16 @@ impl<K: Debug, V: Debug> BoxedNode<K, V> {
 }
 
 #[derive(Debug)]
-pub struct InternalNode<'a, K: Debug, V: Debug> {
-    keys: [MaybeUninit<&'a K>; CAPACITY],
+pub struct InternalNode<K: Debug, V: Debug> {
+    keys: [MaybeUninit<K>; CAPACITY],
     length: u16,
     children: [MaybeUninit<NodeRef<K, V, marker::LeafOrInternal>>; CAPACITY + 1],
 }
 
-unsafe impl<'a, K: Ord + Debug, V: Debug> Sync for InternalNode<'a, K, V> {}
-unsafe impl<'a, K: Ord + Debug, V: Debug> Send for InternalNode<'a, K, V> {}
+unsafe impl<'a, K: Ord + Debug, V: Debug> Sync for InternalNode<K, V> {}
+unsafe impl<'a, K: Ord + Debug, V: Debug> Send for InternalNode<K, V> {}
 
-impl<'a, K: Debug, V: Debug> InternalNode<'a, K, V> {
+impl<'a, K: Debug, V: Debug> InternalNode<K, V> {
     fn new() -> Self {
         InternalNode {
             keys: MaybeUninit::uninit_array(),
@@ -145,8 +162,8 @@ pub struct LeafNode<K: Debug, V: Debug> {
     pub keys: [MaybeUninit<K>; CAPACITY],
     pub vals: [MaybeUninit<V>; CAPACITY],
     pub length: u16,
-    pub prev_leaf: Option<*const LeafNode<K, V>>,
-    pub next_leaf: Option<*const LeafNode<K, V>>,
+    prev_leaf: Option<BoxedNode<K, V>>,
+    next_leaf: Option<BoxedNode<K, V>>,
 }
 
 impl<K: Debug, V: Debug> LeafNode<K, V> {
@@ -181,118 +198,225 @@ impl<K: Ord + Debug, V: Debug> BPlusTree<K, V> {
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.root.insert(key, value)
     }
+
+    pub fn values(&self) -> Vec<V> {
+        self.root.root.traverse_values()
+    }
+
+    pub fn keys(&self) -> Vec<K> {
+        self.root.root.traverse_keys()
+    }
 }
 
-impl<'a, K: Ord + Sized + Debug + 'a, V: Debug> Root<K, V> {
+impl<'a, K: Ord + Sized + Debug, V: Debug> Root<K, V> {
     fn insert(&mut self, key: K, value: V) -> Option<V> {
+        let mut new_root = Box::new(InternalNode::<K, V>::new());
+
+        let force_result = self.root.force();
         let (behavior, ret) = self.root.insert(key, value);
-        match behavior {
-            InsertBehavior::Fit => {}
-            InsertBehavior::Split(key, left_child) => {
-                let mut new_root = Box::new(InternalNode::<K, V>::new());
 
-                let right_child = {
-                    let node_ptr = self.root.node.as_ptr().as_ptr();
-                    let boxed_node = BoxedNode::from_leaf(unsafe { Box::from_raw(node_ptr) });
-                    NodeRef::<K, V, marker::LeafOrInternal> {
-                        node: boxed_node,
-                        height: self.root.height,
+        if let InsertBehavior::Split(key, right_child) = behavior {
+            match force_result {
+                ForceResult::Leaf(node) => {
+                    let left_child = NodeRef::<K, V, marker::LeafOrInternal> {
+                        node: node.node,
+                        height: node.height,
                         _metatype: PhantomData,
+                    };
+
+                    // println!("{:?}", key);
+                    new_root.keys[0] = MaybeUninit::new(key);
+
+                    unsafe {
+                        // println!(
+                        //     "{:?}",
+                        //     MaybeUninit::slice_assume_init_ref(
+                        //         &left_child.node.as_ptr().as_ref().keys
+                        //     )
+                        // );
+                        // println!("{:?}", &left_child.node.as_ptr().as_ref().length());
+                        // println!(
+                        //     "{:?}",
+                        //     MaybeUninit::slice_assume_init_ref(
+                        //         &right_child.node.as_ptr().as_ref().keys
+                        //     )
+                        // );
+                        // println!("{:?}", &right_child.node.as_ptr().as_ref().length());
                     }
-                };
-                unsafe {
+
+                    new_root.children[0] = MaybeUninit::new(left_child);
+                    new_root.children[1] = MaybeUninit::new(right_child);
+                    new_root.length = 2;
+                    // println!("{:?}", new_root);
+                    self.root.node = BoxedNode::from_internal(new_root);
+                    self.root.height += 1;
+                    println!("==========\n height: {:?}\n==========", self.root.height);
+                    return ret;
+                }
+                ForceResult::Internal(mut node) => {
+                    unsafe {
+                        node.node
+                            .as_ptr()
+                            .cast::<InternalNode<K, V>>()
+                            .as_mut()
+                            .set_length(3);
+                    }
+                    let left_child = node.up_cast();
+
                     println!("{:?}", key);
-                    new_root.keys[0] = MaybeUninit::new(&key);
+                    new_root.keys[0] = MaybeUninit::new(key);
+
+                    unsafe {
+                        // println!(
+                        //     "{:?}",
+                        //     MaybeUninit::slice_assume_init_ref(
+                        //         &left_child.node.as_ptr().cast::<InternalNode<K, V>>().as_ref().keys
+                        //     )
+                        // );
+                        println!(
+                            "{:?}",
+                            &left_child
+                                .node
+                                .as_ptr()
+                                .cast::<InternalNode<K, V>>()
+                                .as_ref()
+                                .length()
+                        );
+                        // println!(
+                        //     "{:?}",
+                        //     MaybeUninit::slice_assume_init_ref(
+                        //         &right_child.node.as_ptr().cast::<InternalNode<K, V>>().as_ref().keys
+                        //     )
+                        // );
+                        println!(
+                            "{:?}",
+                            &right_child
+                                .node
+                                .as_ptr()
+                                .cast::<InternalNode<K, V>>()
+                                .as_ref()
+                                .length()
+                        );
+                    }
+
+                    new_root.children[0] = MaybeUninit::new(left_child);
+                    new_root.children[1] = MaybeUninit::new(right_child);
+                    new_root.length = 2;
+                    // println!("{:?}", new_root);
+                    self.root.node = BoxedNode::from_internal(new_root);
+                    self.root.height += 1;
+                    println!("==========\n height: {:?}\n==========", self.root.height);
+                    return ret;
                 }
-
-                unsafe {
-                    println!(
-                        "{:?}",
-                        MaybeUninit::slice_assume_init_ref(&self.root.node.as_ptr().as_ref().keys)
-                    );
-                    println!("{:?}", &self.root.node.as_ptr().as_ref().length());
-                    println!(
-                        "{:?}",
-                        MaybeUninit::slice_assume_init_ref(&left_child.node.as_ptr().as_ref().keys)
-                    );
-                    println!("{:?}", &left_child.node.as_ptr().as_ref().length());
-                }
-
-                new_root.children[0] = MaybeUninit::new(right_child);
-                new_root.children[1] = MaybeUninit::new(left_child);
-                new_root.length = 2;
-                println!("{:?}", new_root);
-
-                self.root.node = BoxedNode::from_internal(new_root);
-                // let new_root_noderef = NodeRef::<K, V, marker::LeafOrInternal> {
-                //     node: NonNull::new(
-                //         (&mut new_root as *mut InternalNode<K, V>) as *mut LeafNode<K, V>,
-                //     )
-                //     .unwrap(),
-                //     height: self.root.height + 1,
-                //     root: None,
-                //     _metatype: PhantomData,
-                // };
-
-                self.root.height += 1;
-            }
+            };
         }
         return ret;
     }
 }
 
-impl<K: Ord + Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
-    fn insert(&mut self, key: K, value: V) -> (InsertBehavior<K, V>, Option<V>) {
-        unsafe {
-            match self.force() {
-                ForceResult::Leaf(mut node) => {
-                    match node.insert(key, value) {
-                        (InsertBehavior::Fit, option) => {
-                            return (InsertBehavior::Fit, option);
-                        }
-                        (InsertBehavior::Split(key, left_child), option) => {
-                            return (InsertBehavior::Split(key, left_child), option);
-                        }
-                    };
-                }
-                ForceResult::Internal(mut node) => {
-                    match node.insert(key, value) {
-                        (InsertBehavior::Fit, option, idx) => {
-                            return (InsertBehavior::Fit, option);
-                        }
-                        (InsertBehavior::Split(key, left_child), option, idx) => {
-                            node.join_node(idx, &key, left_child);
-                            return (InsertBehavior::Fit, option);
-                        }
-                    };
-                }
+impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
+    fn insert(&'a mut self, key: K, value: V) -> (InsertBehavior<K, V>, Option<V>) {
+        match self.force() {
+            ForceResult::Leaf(mut node) => {
+                // let (insertbehavior, option) = unsafe { node.insert(key, value) };
+                // match insertbehavior{
+                //     InsertBehavior::Fit => {}
+                //     InsertBehavior::Split(key, node)=>{
+                //         return (InsertBehavior::Split(key, node), option);
+                //     }
+                // }
+                return unsafe { self.node.ptr.as_mut().insert(key, value) };
             }
+            ForceResult::Internal(mut node) => {
+                let length = node.as_internal().length();
+                let (insertbehavior, option, idx) = node.as_internal_mut().insert(key, value);
+                if let InsertBehavior::Split(key, right_child) = insertbehavior {
+                    println!("{:?}", "IntenalNode added child");
+                    unsafe {
+                        // println!("{:?}", MaybeUninit::slice_assume_init_ref(&right_child.node.as_ptr().as_ref().keys));
+                    }
+                    if CAPACITY < length {
+                        let (left, mid_key, right) = node.as_internal_mut().split();
+                        unsafe {
+                            // println!("{:?}", MaybeUninit::slice_assume_init_ref(&left.keys));
+                            println!("left length: {:?}", &left.length());
+                            println!("mid: {:?}", &mid_key);
+                            println!("right length: {:?}", &right.length());
+                            // println!("{:?}", MaybeUninit::slice_assume_init_ref(&right.keys));
+                        }
+                        println!("right child length:{:?}", right.length());
+                        let mut right = NodeRef::<K, V, marker::Internal> {
+                            node: BoxedNode::from_internal(right),
+                            height: node.height,
+                            _metatype: PhantomData,
+                        };
+                        unsafe { right.join_node(idx, key, right_child) };
+                        self.node = BoxedNode::from_internal(left);
 
-            // return if self.height == 0 {
-            //     let mut leaf = self.node.ptr.as_mut();
-            //     leaf.insert(key, value)
-            // } else {
-            //     let mut internal = unsafe {
-            //         std::mem::transmute::<&mut LeafNode<K, V>, &mut InternalNode<K, V>>(
-            //             &mut self.node.as_ptr().as_mut(),
-            //         )
-            //     };
-            //     internal.insert(key, value)
-            // };
+                        return (InsertBehavior::Split(mid_key, right.up_cast()), option);
+                    } else {
+                        unsafe { node.join_node(idx, key, right_child) };
+                    }
+                }
+                return (InsertBehavior::Fit, option);
+            }
+        }
+
+        // return if self.height == 0 {
+        //     let mut leaf = self.node.ptr.as_mut();
+        //     leaf.insert(key, value)
+        // } else {
+        //     let mut internal = unsafe {
+        //         std::mem::transmute::<&mut LeafNode<K, V>, &mut InternalNode<K, V>>(
+        //             &mut self.node.as_ptr().as_mut(),
+        //         )
+        //     };
+        //     internal.insert(key, value)
+        // };
+    }
+
+    fn traverse_values(&self) -> Vec<V> {
+        match self.force() {
+            ForceResult::Leaf(node) => node.traverse_values(),
+            ForceResult::Internal(node) => node.traverse_values(),
+        }
+    }
+
+    fn traverse_keys(&self) -> Vec<K> {
+        match self.force() {
+            ForceResult::Leaf(node) => node.traverse_keys(),
+            ForceResult::Internal(node) => node.traverse_keys(),
         }
     }
 }
 
-impl<K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Leaf> {
+impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Leaf> {
     unsafe fn insert(&mut self, key: K, value: V) -> (InsertBehavior<K, V>, Option<V>) {
         let leaf = self.node.ptr.as_mut();
         return leaf.insert(key, value);
     }
+
+    fn traverse_values(&self) -> Vec<V> {
+        let leaf = unsafe { self.node.ptr.as_ref() };
+        return unsafe { leaf.traverse_values() };
+    }
+
+    fn traverse_keys(&self) -> Vec<K> {
+        let leaf = unsafe { self.node.ptr.as_ref() };
+        return unsafe { leaf.traverse_keys() };
+    }
 }
 
 impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Internal> {
-    fn split(&mut self) -> (Box<InternalNode<'a, K, V>>, Box<InternalNode<'a, K, V>>) {
+    fn split(&'a mut self) -> (Box<InternalNode<K, V>>, K, Box<InternalNode<K, V>>) {
         self.as_internal_mut().split()
+    }
+
+    fn traverse_values(&self) -> Vec<V> {
+        self.as_internal().traverse_values()
+    }
+    fn traverse_keys(&self) -> Vec<K> {
+        self.as_internal().traverse_keys()
     }
 
     unsafe fn insert(&mut self, key: K, value: V) -> (InsertBehavior<K, V>, Option<V>, usize) {
@@ -303,24 +427,24 @@ impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Internal> {
     unsafe fn join_node(
         &mut self,
         index: usize,
-        key: &K,
+        key: K,
         node: NodeRef<K, V, marker::LeafOrInternal>,
     ) {
-        let mut internal = self.as_internal_mut();
+        let mut self_as_internal = self.as_internal_mut();
         let mut key = MaybeUninit::new(key);
         let mut node = MaybeUninit::new(node);
-        println!("{:?}", internal.length());
+        println!("{:?}", self_as_internal.length());
         println!("index: {:?}", index);
-        println!("raised key: {:?}", key.assume_init_ref());
+        // println!("raised key: {:?}", key.assume_init_ref());
 
-        for idx in index..internal.length() {
-            std::mem::swap(&mut internal.keys[idx], &mut key);
+        for idx in index..self_as_internal.length() {
+            std::mem::swap(&mut self_as_internal.keys[idx], &mut key);
         }
-        for idx in index..internal.length() + 1 {
-            std::mem::swap(&mut internal.children[idx], &mut node);
+        for idx in (index + 1)..self_as_internal.length() + 1 {
+            std::mem::swap(&mut self_as_internal.children[idx], &mut node);
         }
 
-        internal.length += 1;
+        self_as_internal.length += 1;
     }
 }
 
@@ -329,38 +453,68 @@ impl<K: Ord + Debug, V: Debug> LeafNode<K, V> {
         self.length as usize
     }
 
+    unsafe fn traverse_values(&self) -> Vec<V> {
+        let mut current_leaf_vals = self.vals[0..self.length()]
+            .iter()
+            .map(|x| x.assume_init_read())
+            .collect::<Vec<V>>();
+        if let Some(next) = &self.next_leaf {
+            let mut ret = std::ptr::read(next.as_ptr().as_ptr()).traverse_values();
+            current_leaf_vals.append(&mut ret);
+        }
+        current_leaf_vals
+    }
+
+    unsafe fn traverse_keys(&self) -> Vec<K> {
+        let mut current_leaf_keys = self.keys[0..self.length()]
+            .iter()
+            .map(|x| x.assume_init_read())
+            .collect::<Vec<K>>();
+        println!("{:?}", current_leaf_keys);
+        if let Some(next) = &self.next_leaf {
+            let mut ret = std::ptr::read(next.as_ptr().as_ptr()).traverse_keys();
+            current_leaf_keys.append(&mut ret);
+        }
+        current_leaf_keys
+    }
+
     fn split(&mut self) -> (Box<LeafNode<K, V>>, Box<LeafNode<K, V>>) {
         let mut left_leafnode = LeafNode::new();
-        let mut right_leafnode =LeafNode::new();
+        let mut right_leafnode = LeafNode::new();
 
         for idx in 0..B {
             std::mem::swap(&mut right_leafnode.keys[idx], &mut self.keys[B - 1 + idx]);
             std::mem::swap(&mut right_leafnode.vals[idx], &mut self.vals[B - 1 + idx]);
         }
+        right_leafnode.length = TryFrom::try_from(B).unwrap();
+
         for idx in 0..B - 1 {
             std::mem::swap(&mut left_leafnode.keys[idx], &mut self.keys[idx]);
             std::mem::swap(&mut left_leafnode.vals[idx], &mut self.vals[idx]);
         }
-
-        right_leafnode.length = TryFrom::try_from(B).unwrap();
-        right_leafnode.prev_leaf = Some(&mut left_leafnode as *const Self);
-        right_leafnode.next_leaf = self.next_leaf;
-
         left_leafnode.length = TryFrom::try_from(CAPACITY - B).unwrap();
-        left_leafnode.prev_leaf = self.prev_leaf;
-        left_leafnode.next_leaf = Some(&mut right_leafnode as  *mut Self);
+        
+        unsafe {
+            right_leafnode.prev_leaf = Some(BoxedNode::from_leaf(Box::from_raw(
+                &mut left_leafnode as *mut LeafNode<K, V>,
+            )));
+            right_leafnode.next_leaf = self.next_leaf.take();
 
-      
+            left_leafnode.prev_leaf = self.prev_leaf.take();
+            left_leafnode.next_leaf = Some(BoxedNode::from_leaf(Box::from_raw(
+                &mut right_leafnode as *mut LeafNode<K, V>,
+            )));
+        }
         (Box::new(left_leafnode), Box::new(right_leafnode))
     }
 
     fn insert(&mut self, key: K, value: V) -> (InsertBehavior<K, V>, Option<V>) {
-        // println!("Leaf: self.length == {:?}, Key: {:?}", self.length, &key);
-        // unsafe {
-        //     println!("LeafNode.insert(): self.length {:?}", &self.length());
-        // }
+        println!("Leaf: self.length == {:?}, Key: {:?}", self.length, &key);
+        unsafe {
+            println!("LeafNode.insert(): self.length {:?}", &self.length());
+        }
 
-        // println!("insert key: {:?}", key);
+        println!("insert key: {:?}", key);
 
         if self.length() < CAPACITY {
             // 空きがある場合
@@ -403,54 +557,52 @@ impl<K: Ord + Debug, V: Debug> LeafNode<K, V> {
             return (InsertBehavior::Fit, None);
         } else {
             //　空きがない場合
-            println!("{:?}", "Leaf is splited");
+            // println!("{:?}", "Leaf is splited");
 
             let mut new_leafnode = LeafNode {
                 keys: MaybeUninit::uninit_array(),
                 vals: MaybeUninit::uninit_array(),
                 length: TryFrom::try_from(B).unwrap(),
-                prev_leaf:  Some(self as *mut LeafNode<K,V>),
-                next_leaf: self.next_leaf,
+                prev_leaf: unsafe { Some(BoxedNode::from_leaf(Box::from_raw(self as *mut Self))) },
+                next_leaf: self.next_leaf.take(),
             };
-
-
             for idx in 0..B {
                 std::mem::swap(&mut new_leafnode.keys[idx], &mut self.keys[B - 1 + idx]);
                 std::mem::swap(&mut new_leafnode.vals[idx], &mut self.vals[B - 1 + idx]);
             }
 
-            self.length = TryFrom::try_from(CAPACITY.wrapping_sub(B)).unwrap();
+            self.length = TryFrom::try_from(CAPACITY - B).unwrap();
 
             unsafe {
-                if &key <= self.keys[self.length() - 1].assume_init_ref() {
+                if key <= self.keys[self.length() - 1].assume_init_read() {
                     self.insert(key, value);
                 } else {
                     new_leafnode.insert(key, value);
                 };
             }
 
-            // unsafe {
-            //     println!("{:?}", MaybeUninit::slice_assume_init_ref(&self.keys));
-            //     println!("{:?}", self.length());
-            //     println!(
-            //         "{:?}",
-            //         MaybeUninit::slice_assume_init_ref(&new_leafnode.keys)
-            //     );
-            //     println!("{:?}", new_leafnode.length());
-            // }
+            unsafe {
+                println!("{:?}", MaybeUninit::slice_assume_init_ref(&self.keys));
+                println!("{:?}", self.length());
+                println!(
+                    "{:?}",
+                    MaybeUninit::slice_assume_init_ref(&new_leafnode.keys)
+                );
+                println!("{:?}", new_leafnode.length());
+            }
 
-            self.next_leaf = Some(&mut new_leafnode as *mut LeafNode<K,V>);
-
+            let new_boxedleafnode = Box::new(new_leafnode);
 
             let new_noderef = NodeRef {
-                node: BoxedNode::from_leaf(Box::new(new_leafnode)),
+                node: BoxedNode::from_leaf(new_boxedleafnode),
                 height: 0,
                 _metatype: PhantomData,
             };
 
+            self.next_leaf = Some(BoxedNode::from_leaf(unsafe { Box::from_raw(new_noderef.node.as_ptr().as_ptr()) }));
 
             unsafe {
-                // println!("{:?}", self.keys[self.length() - 1].assume_init_read());
+                println!("{:?}", self.keys[self.length() - 1].assume_init_ref());
                 let shaft_key = self.keys[self.length() - 1].assume_init_read();
                 return (InsertBehavior::Split(shaft_key, new_noderef), None);
             }
@@ -458,16 +610,26 @@ impl<K: Ord + Debug, V: Debug> LeafNode<K, V> {
     }
 }
 
-impl<'a, K: Ord + Debug, V: Debug> InternalNode<'a, K, V> {
-    fn length(&self) -> usize {
+impl<'a, K: Ord + Debug, V: Debug> InternalNode<K, V> {
+    fn length(&'a self) -> usize {
         self.length as usize
     }
 
-    fn split(&mut self) -> (Box<InternalNode<'a, K, V>>, Box<InternalNode<'a, K, V>>) {
+    fn set_length(&'a mut self, len: u16) {
+        self.length = len;
+    }
+
+    fn split(&mut self) -> (Box<InternalNode<K, V>>, K, Box<InternalNode<K, V>>) {
         let mut left_internal_node: InternalNode<K, V> = InternalNode::new();
         let mut right_internal_node: InternalNode<K, V> = InternalNode::new();
 
-        let raised_key = unsafe {self.keys[B - 1].assume_init_read()};
+        unsafe {
+            println!("{:?}", self.length());
+
+            println!("{:?}", MaybeUninit::slice_assume_init_ref(&self.keys));
+        }
+
+        let raised_key = unsafe { self.keys[B - 1].assume_init_read() };
 
         for idx in 0..B - 1 {
             std::mem::swap(&mut left_internal_node.keys[idx], &mut self.keys[idx]);
@@ -490,7 +652,24 @@ impl<'a, K: Ord + Debug, V: Debug> InternalNode<'a, K, V> {
         left_internal_node.length = 3;
         right_internal_node.length = 3;
 
-        (Box::new(left_internal_node), Box::new(right_internal_node))
+        unsafe {
+            println!("splited");
+
+            // println!(
+            //     "{:?}",
+            //     MaybeUninit::slice_assume_init_ref(&left_internal_node.keys)
+            // );
+            // println!(
+            //     "{:?}",
+            //     MaybeUninit::slice_assume_init_ref(&right_internal_node.keys)
+            // );
+        }
+
+        (
+            Box::new(left_internal_node),
+            raised_key,
+            Box::new(right_internal_node),
+        )
     }
 
     fn insert(&mut self, key: K, value: V) -> (InsertBehavior<K, V>, Option<V>, usize) {
@@ -502,72 +681,78 @@ impl<'a, K: Ord + Debug, V: Debug> InternalNode<'a, K, V> {
             );
             println!("Internal insert key: {:?}", key);
 
-            if self.length() < CAPACITY + 1 {
-                // 空きがある場合
+            // if self.length() < CAPACITY + 1 {
+            // 空きがある場合
 
-                // unsafe {
-                //     println!("{:?}", MaybeUninit::slice_assume_init_ref(&self.keys));
-                //     println!("{:?}", self.length());
-                // }
+            unsafe {
+                // println!("{:?}", MaybeUninit::slice_assume_init_ref(&self.keys));
+                // println!("{:?}", self.length());
+            }
 
-                for idx in 0..self.length() - 1 {
-                    // 挿入位置を決定する。
+            for idx in 0..self.length() - 1 {
+                // 挿入位置を決定する。
 
-                    let next = self.keys[idx].assume_init_ref();
-                    println!("Internal compared key: {:?}", next);
-                    if &key <= next {
-                        return {
-                            let (insert_behavior, option) =
-                                self.children[idx].assume_init_mut().insert(key, value);
-                            (insert_behavior, option, idx)
-                        };
-                    }
-                }
-
-                // ノードが保持するどのkeyよりも大きいkeyとして取り扱う。
-
-                let idx = self.length() - 1;
-                let (insert_behavior, option) =
-                    self.children[idx].assume_init_mut().insert(key, value);
-                // println!("Internal: self.length == {:?}", self.length());
-                return (insert_behavior, option, idx);
-            } else {
-                //　空きがない場合
-
-                let mut new_internal_node: InternalNode<K, V> = InternalNode::new();
-
-                let raised_key = self.keys[B].assume_init_read();
-
-                for idx in 0..B - 1 {
-                    std::mem::swap(&mut new_internal_node.keys[idx], &mut self.keys[B + idx]);
-                }
-                for idx in 0..B {
-                    std::mem::swap(
-                        &mut new_internal_node.children[idx],
-                        &mut self.children[B + idx],
-                    );
-                }
-                new_internal_node.length = 3;
-
-                unsafe {
-                    if &key <= self.keys[self.length() - 1].assume_init_ref() {
-                        self.insert(key, value);
-                    } else {
-                        new_internal_node.insert(key, value);
+                let next = self.keys[idx].assume_init_read();
+                println!("Internal compared key: {:?}", next);
+                if key <= next {
+                    return {
+                        let (insert_behavior, option) =
+                            self.children[idx].assume_init_mut().insert(key, value);
+                        (insert_behavior, option, idx)
                     };
                 }
-
-                let new_noderef = NodeRef::<K, V, marker::LeafOrInternal> {
-                    node: BoxedNode::from_internal(Box::new(new_internal_node)),
-                    height: 0,
-                    _metatype: PhantomData,
-                };
-
-                // return (InsertBehavior::Split(raised_key, new_noderef), None, 0);
-
-                // Todo
-                unimplemented!("internalnodeに空きがない場合")
             }
+
+            // ノードが保持するどのkeyよりも大きいkeyとして取り扱う。
+
+            let idx = self.length() - 1;
+            let (insert_behavior, option) = self.children[idx].assume_init_mut().insert(key, value);
+            return (insert_behavior, option, idx);
+            // } else {
+            //　空きがない場合
+
+            // let mut new_internal_node: InternalNode<K, V> = InternalNode::new();
+
+            // let raised_key = self.keys[B].assume_init_read();
+
+            // for idx in 0..B - 1 {
+            //     std::mem::swap(&mut new_internal_node.keys[idx], &mut self.keys[B + idx]);
+            // }
+            // for idx in 0..B {
+            //     std::mem::swap(
+            //         &mut new_internal_node.children[idx],
+            //         &mut self.children[B + idx],
+            //     );
+            // }
+            // new_internal_node.length = 3;
+
+            // unsafe {
+            //     if &key <= self.keys[self.length() - 1].assume_init_ref() {
+            //         self.insert(key, value);
+            //     } else {
+            //         new_internal_node.insert(key, value);
+            //     };
+            // }
+
+            // let new_noderef = NodeRef::<K, V, marker::LeafOrInternal> {
+            //     node: BoxedNode::from_internal(Box::new(new_internal_node)),
+            //     height: 0,
+            //     _metatype: PhantomData,
+            // };
+
+            // return (InsertBehavior::Split(raised_key, new_noderef), None, 0);
+
+            // Todo
+            unimplemented!("internalnodeに空きがない場合")
+            // }
         }
+    }
+
+    fn traverse_values(&self) -> Vec<V> {
+        unsafe { self.children[0].assume_init_ref().traverse_values() }
+    }
+
+    fn traverse_keys(&self) -> Vec<K> {
+        unsafe { self.children[0].assume_init_ref().traverse_keys() }
     }
 }
