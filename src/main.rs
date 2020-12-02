@@ -2,11 +2,12 @@
 #![feature(maybe_uninit_ref)]
 #![feature(maybe_uninit_slice)]
 #![feature(maybe_uninit_extra)]
+#![feature(is_sorted)]
 
 // mod query;
 // use query::lexer::Lexer;
 mod bplus_tree;
-use bplus_tree::BPlusTree;
+use bplus_tree::bplus_tree::BPlusTree;
 mod storage;
 
 use std::collections::BTreeMap;
@@ -43,20 +44,23 @@ fn main() {
 
     let mut rng = rand::thread_rng();
     let mut insert_dataset = vec![];
-    for _ in 0..100 {
-        let key = rng.gen::<u8>();
+    for _ in 0..10000 {
+        let key = rng.gen::<u16>();
         insert_dataset.push(key as usize);
     }
-    println!("{:?}", insert_dataset);
-    for key in insert_dataset.clone() {
-        println!("{:?}", key);
+    // println!("{:?}", insert_dataset);
+    for &key in &insert_dataset {
+        // println!("{:?}", key);
         btree.insert(key, "data");
     }
     println!("{:?}", btree);
-    btree.keys();
+    let keys = btree.keys();
     // println!("{:?}", btree.keys());
-    insert_dataset.sort();
-    println!("{:?}", insert_dataset);
-    println!("{:?}", btree.values());
+    // println!("{:?}", insert_dataset);
 
+    insert_dataset.sort();
+    // println!("{:?}", insert_dataset);
+    println!("{:?}", keys);
+    println!("{:?}", keys.is_sorted());
+    println!("{:?}", btree.get(&insert_dataset[0]).unwrap());
 }
