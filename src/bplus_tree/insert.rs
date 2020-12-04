@@ -1,5 +1,5 @@
 use crate::bplus_tree::bplus_tree::*;
-use std::{convert::TryFrom, fmt::Debug, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
+use std::{convert::TryFrom, fmt::Debug, marker::PhantomData, mem::MaybeUninit};
 
 impl<K: Ord + Debug, V: Debug> BPlusTree<K, V> {
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -66,7 +66,6 @@ impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
             }
             ForceResult::Internal(mut node) => {
                 let length = node.as_internal().length();
-
                 let (insertbehavior, option, idx) = node.insert(key, value);
                 if let InsertBehavior::Split(key, inserted_node) = insertbehavior {
                     if CAPACITY < length {
@@ -109,6 +108,7 @@ impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Internal> {
         return internal.insert(key, value);
     }
 }
+
 impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Leaf> {
     pub(crate) unsafe fn insert(
         &mut self,
@@ -152,7 +152,7 @@ impl<K: Ord + Debug, V: Debug> LeafNode<K, V> {
             // 空きがある場合
 
             if let Some(idx) = self
-                .keys
+                .keys[0..self.length()]
                 .iter()
                 .position(|x| unsafe { x.assume_init_ref() == &key })
             {
