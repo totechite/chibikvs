@@ -1,9 +1,9 @@
-use crate::bplus_tree::insert::*;
 use std::{convert::TryFrom, fmt::Debug, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
 
 pub(crate) const B: usize = 3;
 pub(crate) const MIN_LEN: usize = B - 1;
 pub(crate) const CAPACITY: usize = 2 * B - 1;
+pub(crate) const INTERNAL_CHILDREN_CAPACITY: usize = CAPACITY+1;
 
 pub mod marker {
     #[derive(Debug)]
@@ -69,7 +69,7 @@ unsafe impl<K: Ord + Debug, V: Debug, Type> Send for NodeRef<K, V, Type> {}
 pub(crate) struct InternalNode<K: Debug, V: Debug> {
     pub(crate) keys: [MaybeUninit<K>; CAPACITY],
     pub(crate) length: u16,
-    pub(crate) children: [MaybeUninit<NodeRef<K, V, marker::LeafOrInternal>>; CAPACITY + 1],
+    pub(crate) children: [MaybeUninit<NodeRef<K, V, marker::LeafOrInternal>>; INTERNAL_CHILDREN_CAPACITY],
 }
 unsafe impl<'a, K: Ord + Debug, V: Debug> Sync for InternalNode<K, V> {}
 unsafe impl<'a, K: Ord + Debug, V: Debug> Send for InternalNode<K, V> {}
@@ -211,8 +211,6 @@ impl<K: Ord + Debug, V: Debug> Root<K, V> {
     }
 }
 
-
-
 impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
     fn traverse_values(&self) -> Vec<V> {
         match self.force() {
@@ -256,8 +254,6 @@ impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Internal> {
     fn traverse_keys(&self) -> Vec<K> {
         self.as_internal().traverse_keys()
     }
-
-
 
     pub(crate) unsafe fn join_node(
         &mut self,
@@ -386,6 +382,7 @@ impl<'a, K: Ord + Debug, V: Debug> InternalNode<K, V> {
                 &mut self.children[B + idx],
             );
         }
+
         left_internal_node.length = B as u16;
         right_internal_node.length = B as u16;
 
