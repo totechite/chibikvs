@@ -1,5 +1,5 @@
 use crate::bplus_tree::bplus_tree::*;
-use std::{convert::TryFrom, fmt::Debug, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
+use std::{fmt::Debug, mem::MaybeUninit};
 
 impl<'a, K: Ord + Debug, V: Debug> BPlusTree<K, V> {
     pub fn get(&self, key: &'a K) -> Option<&V> {
@@ -18,13 +18,13 @@ impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
     pub(crate) fn get(&self, key: &K) -> Option<*const V> {
         match self.force() {
             ForceResult::Leaf(node) => node.get(key),
-            ForceResult::Internal(node) => node.as_internal().get(key),
+            ForceResult::Internal(node) => node.get(key),
         }
     }
 }
 
 impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Internal> {
-    pub(crate) fn get(&mut self, key: &K) -> Option<*const V> {
+    pub(crate) fn get(&self, key: &K) -> Option<*const V> {
         let internal = self.as_internal();
         return internal.get(key);
     }
@@ -54,8 +54,10 @@ impl<'a, K: Ord + Debug, V: Debug> InternalNode<K, V> {
 
 impl<'a, K: Ord + Debug, V: Debug> LeafNode<K, V> {
     pub(crate) fn get(&self, key: &K) -> Option<*const V> {
-        let matching_key = |x: &MaybeUninit<K>| unsafe { x.assume_init_ref() == key };
-        let idx = self.keys.iter().position(matching_key)?;
-        return Some(unsafe { (self.vals[idx].as_ptr()) });
+        let idx = {
+            let matching_key = |x: &MaybeUninit<K>| unsafe { x.assume_init_ref() == key };
+            self.keys[0..self.length()].iter().position(matching_key)?
+        };
+        return Some(self.vals[idx].as_ptr());
     }
 }
