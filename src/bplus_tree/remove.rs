@@ -1,30 +1,36 @@
 use crate::bplus_tree::bplus_tree::*;
 use std::{fmt::Debug, mem::MaybeUninit};
 
+#[derive(Debug)]
+pub(crate) enum RemoveBehavior<K: Debug, V: Debug> {
+    RaiseChild(NodeRef<K, V, marker::LeafOrInternal>, Option<(usize, V)>),
+    Success(Option<(usize, V)>),
+}
+
 impl<'a, K: Ord + Debug, V: Debug> BPlusTree<K, V> {
-    pub(crate) fn delete(&mut self, key: &K) -> Option<V> {
-        let ret = self.root.delete(key);
+    pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
+        let ret = self.root.remove(key);
         self.length -= 1;
         return ret;
     }
 }
 
 impl<'a, K: Ord + Sized + Debug, V: Debug> Root<K, V> {
-    pub(crate) fn delete(&mut self, key: &K) -> Option<V> {
-        let (_, value) = self.root.delete(key)?;
+    pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
+        let (_, value) = self.root.remove(key)?;
         return Some(value);
     }
 }
 
 impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
-    pub(crate) fn delete(&mut self, key: &K) -> Option<(usize, V)> {
-        let delete_behavier = match self.force() {
-            ForceResult::Leaf(mut node) => node.delete(key),
-            ForceResult::Internal(mut node) => node.delete(key),
+    pub(crate) fn remove(&mut self, key: &K) -> Option<(usize, V)> {
+        let remove_behavior = match self.force() {
+            ForceResult::Leaf(mut node) => node.remove(key),
+            ForceResult::Internal(mut node) => node.remove(key),
         };
-        match delete_behavier {
-            DeleteBehavior::Success(ret) => return ret,
-            DeleteBehavior::RaiseChild(node, ret) => {
+        match remove_behavior {
+            RemoveBehavior::Success(ret) => return ret,
+            RemoveBehavior::RaiseChild(node, ret) => {
                 self.node = node.node;
                 self.height = node.height;
                 return ret;
@@ -65,9 +71,9 @@ impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::LeafOrInternal> {
 }
 
 impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Internal> {
-    pub(crate) fn delete(&mut self, key: &K) -> DeleteBehavior<K, V> {
+    pub(crate) fn remove(&mut self, key: &K) -> RemoveBehavior<K, V> {
         let internal = self.as_internal_mut();
-        return internal.delete(key);
+        return internal.remove(key);
     }
 
     pub(crate) fn devide(&mut self, node: &mut Self) -> bool {
@@ -146,9 +152,9 @@ impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Internal> {
     }
 }
 impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Leaf> {
-    pub(crate) fn delete(&mut self, key: &K) -> DeleteBehavior<K, V> {
+    pub(crate) fn remove(&mut self, key: &K) -> RemoveBehavior<K, V> {
         let leaf = unsafe { self.node.ptr.as_mut() };
-        return leaf.delete(key);
+        return leaf.remove(key);
     }
 
     pub(crate) fn marge(&mut self, leaf: &mut Self) {
@@ -212,19 +218,13 @@ impl<'a, K: Ord + Debug, V: Debug> NodeRef<K, V, marker::Leaf> {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum DeleteBehavior<K: Debug, V: Debug> {
-    RaiseChild(NodeRef<K, V, marker::LeafOrInternal>, Option<(usize, V)>),
-    Success(Option<(usize, V)>),
-}
-
 impl<'a, K: Ord + Debug, V: Debug> InternalNode<K, V> {
-    pub(crate) fn delete(&mut self, key: &K) -> DeleteBehavior<K, V> {
+    pub(crate) fn remove(&mut self, key: &K) -> RemoveBehavior<K, V> {
         let (child_idx, child_length, val) = {
-            let (child_idx, ret) = self.delete_aux(key);
+            let (child_idx, ret) = self.remove_aux(key);
 
             if let None = ret {
-                return DeleteBehavior::Success(None);
+                return RemoveBehavior::Success(None);
             };
 
             let (child_length, val) = ret.unwrap();
@@ -233,7 +233,7 @@ impl<'a, K: Ord + Debug, V: Debug> InternalNode<K, V> {
 
         if self.length() <= 1 {
             let raised_node = unsafe { self.children[child_idx].assume_init_read() };
-            return DeleteBehavior::RaiseChild(raised_node, Some((self.length(), val)));
+            return RemoveBehavior::RaiseChild(raised_node, Some((self.length(), val)));
         };
 
         // Check necessity balancing
@@ -272,12 +272,12 @@ impl<'a, K: Ord + Debug, V: Debug> InternalNode<K, V> {
             }
         }
 
-        DeleteBehavior::Success(Some((self.length(), val)))
+        RemoveBehavior::Success(Some((self.length(), val)))
     }
 
-    pub(crate) fn delete_aux(&mut self, key: &K) -> (usize, Option<(usize, V)>) {
+    pub(crate) fn remove_aux(&mut self, key: &K) -> (usize, Option<(usize, V)>) {
         if self.length() == 0 {
-            let ret = unsafe { self.children[0].assume_init_mut().delete(key) };
+            let ret = unsafe { self.children[0].assume_init_mut().remove(key) };
             return (0, ret);
         }
 
@@ -285,13 +285,13 @@ impl<'a, K: Ord + Debug, V: Debug> InternalNode<K, V> {
             // 挿入位置を決定する。
             let next = unsafe { self.keys[idx].assume_init_read() };
             if key <= &next {
-                let ret = unsafe { self.children[idx].assume_init_mut().delete(key) };
+                let ret = unsafe { self.children[idx].assume_init_mut().remove(key) };
                 return (idx, ret);
             };
         }
         // ノードが保持するどのkeyよりも大きいkeyとして取り扱う。
         let idx = self.length() - 1;
-        let ret = unsafe { self.children[idx].assume_init_mut().delete(key) };
+        let ret = unsafe { self.children[idx].assume_init_mut().remove(key) };
         return (idx, ret);
     }
 
@@ -305,13 +305,13 @@ impl<'a, K: Ord + Debug, V: Debug> InternalNode<K, V> {
 }
 
 impl<'a, K: Ord + Debug, V: Debug> LeafNode<K, V> {
-    pub(crate) fn delete(&mut self, key: &K) -> DeleteBehavior<K, V> {
+    pub(crate) fn remove(&mut self, key: &K) -> RemoveBehavior<K, V> {
         // keyが存在するか確認
         let idx = {
             let matching_key = |x: &MaybeUninit<K>| unsafe { x.assume_init_ref() == key };
             let idx = self.keys[0..self.length()].iter().position(matching_key);
             if let None = idx {
-                return DeleteBehavior::Success(None);
+                return RemoveBehavior::Success(None);
             }
             idx.unwrap()
         };
@@ -327,7 +327,7 @@ impl<'a, K: Ord + Debug, V: Debug> LeafNode<K, V> {
             }
         }
         self.length -= 1;
-        DeleteBehavior::Success(Some((self.length(), ret)))
+        RemoveBehavior::Success(Some((self.length(), ret)))
     }
 
     pub(crate) fn get_largest_key(&self) -> K {
