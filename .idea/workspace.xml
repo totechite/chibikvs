@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/Cargo.toml" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="6219764e-0349-4756-ac99-be69463e2ff2" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/src/bplus_tree/bplus_tree.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/bplus_tree/bplus_tree.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/bplus_tree/get.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/bplus_tree/get.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/bplus_tree/insert.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/bplus_tree/insert.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/bplus_tree/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/bplus_tree/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/bplus_tree/remove.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/bplus_tree/remove.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="MacroExpansionManager">
+    <option name="directoryName" value="4xq0gsxf" />
+  </component>
+  <component name="ProjectId" id="1leoZSCjkWdRbhy0B1LRvqw4CCL" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showExcludedFiles" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">
+    <property name="ASKED_SHARE_PROJECT_CONFIGURATION_FILES" value="true" />
+    <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$/Cargo.toml" />
+    <property name="org.rust.cargo.project.model.PROJECT_DISCOVERY" value="true" />
+    <property name="org.rust.hideNoCargoProjectNotificationsC:/Users/totechite/Desktop/プ学習・個人プロジェクト/chibikvs/src/bplus_tree/map.rs" value="true" />
+  </component>
+  <component name="RustProjectSettings">
+    <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
+  </component>
+  <component name="SvnConfiguration">
+    <configuration />
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="6219764e-0349-4756-ac99-be69463e2ff2" name="Default Changelist" comment="" />
+      <created>1607966975096</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1607966975096</updated>
+    </task>
+    <servers />
+  </component>
+  <component name="WindowStateProjectService">
+    <state x="634" y="220" key="FileChooserDialogImpl" timestamp="1607968336302">
+      <screen x="0" y="0" width="1707" height="929" />
+    </state>
+    <state x="634" y="220" key="FileChooserDialogImpl/0.0.1707.929@0.0.1707.929" timestamp="1607968336302" />
+    <state width="1667" height="246" key="GridCell.Tab.0.bottom" timestamp="1607968379689">
+      <screen x="0" y="0" width="1707" height="929" />
+    </state>
+    <state width="1667" height="246" key="GridCell.Tab.0.bottom/0.0.1707.929@0.0.1707.929" timestamp="1607968379689" />
+    <state width="1667" height="246" key="GridCell.Tab.0.center" timestamp="1607968379689">
+      <screen x="0" y="0" width="1707" height="929" />
+    </state>
+    <state width="1667" height="246" key="GridCell.Tab.0.center/0.0.1707.929@0.0.1707.929" timestamp="1607968379689" />
+    <state width="1667" height="246" key="GridCell.Tab.0.left" timestamp="1607968379689">
+      <screen x="0" y="0" width="1707" height="929" />
+    </state>
+    <state width="1667" height="246" key="GridCell.Tab.0.left/0.0.1707.929@0.0.1707.929" timestamp="1607968379689" />
+    <state width="1667" height="246" key="GridCell.Tab.0.right" timestamp="1607968379689">
+      <screen x="0" y="0" width="1707" height="929" />
+    </state>
+    <state width="1667" height="246" key="GridCell.Tab.0.right/0.0.1707.929@0.0.1707.929" timestamp="1607968379689" />
+    <state x="263" y="191" key="new project wizard" timestamp="1607968375976">
+      <screen x="0" y="0" width="1707" height="929" />
+    </state>
+    <state x="263" y="191" key="new project wizard/0.0.1707.929@0.0.1707.929" timestamp="1607968375976" />
+  </component>
+</project>

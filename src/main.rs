@@ -4,63 +4,58 @@
 #![feature(maybe_uninit_extra)]
 #![feature(is_sorted)]
 
-// mod query;
-// use query::lexer::Lexer;
-mod bplus_tree;
-use bplus_tree::bplus_tree::BPlusTree;
-mod storage;
+use bytes::Bytes;
+use std::collections::HashMap;
+use mini_redis::{Connection, Frame};
+use std::sync::{Arc, Mutex};
+use tokio::net::{TcpListener, TcpStream};
+use b_plus_tree::BPlusTreeMap;
 
-use std::collections::BTreeMap;
+type Db = Arc<Mutex<BPlusTreeMap<String, Bytes>>>;
+type ShardedDb = Arc<Vec<Mutex<HashMap<String, Vec<u8>>>>>;
 
-use rand::prelude::*;
+#[tokio::main]
+async fn main() {
+    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
 
-fn main() {
-    // let mut ret = Lexer::new("select * from hoge;").exec();
-    // println!("{:?}", ret);
-    // ret = Lexer::new("select * from hoge where age>=10;").exec();
-    // println!("{:?}", ret);
-    // ret = Lexer::new("INSERT INTO hoge VALUES (\"name\", 20);").exec();
-    // println!("{:?}", ret);
+    println!("Listening");
 
-    // let mut btree = BTreeMap::<usize, &str>::new();
-    let mut btree = BPlusTree::<usize, &str>::new();
+    let db: Db = Arc::new(Mutex::new(BPlusTreeMap::new()));
 
-    // btree.insert(9usize, "data");
-    // // let ret = btree.get(&9);
-    // // println!("{:?}",ret);
-    // btree.insert(20, "data");
-    // btree.insert(10, "data");
-    // btree.insert(15, "data");
-    // btree.insert(18, "data");
-    // btree.insert(5, "data");
+    loop {
+        let (socket, _) = listener.accept().await.unwrap();
 
-    // btree.insert(1, "data");
-    // btree.insert(11, "data");
-    // btree.insert(50, "data");
-    
-    // btree.insert(22, "data");
-    // btree.insert(13, "data");
+        let db = db.clone();
 
-
-    let mut rng = rand::thread_rng();
-    let mut insert_dataset = vec![];
-    for _ in 0..10000 {
-        let key = rng.gen::<u16>();
-        insert_dataset.push(key as usize);
+        println!("Accepted");
+        tokio::spawn(async move {
+            process(socket, db).await;
+        });
     }
-    // println!("{:?}", insert_dataset);
-    for &key in &insert_dataset {
-        // println!("{:?}", key);
-        btree.insert(key, "data");
-    }
-    println!("{:?}", btree);
-    let keys = btree.keys();
-    // println!("{:?}", btree.keys());
-    // println!("{:?}", insert_dataset);
+}
+async fn process(socket: TcpStream, db: Db) {
+    use mini_redis::Command::{self, Get, Set};
 
-    insert_dataset.sort();
-    // println!("{:?}", insert_dataset);
-    println!("{:?}", keys);
-    println!("{:?}", keys.is_sorted());
-    println!("{:?}", btree.get(&insert_dataset[0]).unwrap());
+    let mut connection = Connection::new(socket);
+
+    while let Some(frame) = connection.read_frame().await.unwrap() {
+        let response = match Command::from_frame(frame).unwrap() {
+            Set(cmd) => {
+                let mut db = db.lock().unwrap();
+                db.insert(cmd.key().to_string(), cmd.value().clone());
+                Frame::Simple("OK".to_string())
+            }
+            Get(cmd) => {
+                let db = db.lock().unwrap();
+                if let Some(value) = db.get(&cmd.key().to_string()) {
+                    Frame::Bulk(value.clone().into())
+                } else {
+                    Frame::Null
+                }
+            }
+            cmd => panic!(""),
+        };
+
+        connection.write_frame(&response).await.unwrap();
+    }
 }
